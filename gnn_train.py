@@ -20,10 +20,14 @@ from ldpc.mod2 import *
 
 if torch.cuda.is_available():
     device = torch.device('cuda')
-    use_amp = True
+    use_amp = True # to use automatic mixed precision
+    amp_data_type = torch.float16
 else:
     device = torch.device('cpu')
-    use_amp = False
+    use_amp = True
+    '''float16 is not supported for cpu use bfloat16 instead'''
+    amp_data_type = torch.bfloat16
+
 
 """
     Parameters
@@ -187,7 +191,7 @@ for epoch in range(epochs):
         # optimizer.zero_grad()
         loss = 0
 
-        with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
+        with torch.autocast(device_type=device.type, dtype=amp_data_type, enabled=use_amp):
             outputs = gnn(inputs, src_ids, dst_ids)
             for j, out in enumerate(outputs):
                 eloss = criterion(out.view(-1, size, n_node_inputs)[:, error_index:].reshape(-1, n_node_inputs),
@@ -211,7 +215,7 @@ for epoch in range(epochs):
 
         epoch_loss.append(loss.detach())
     epoch_loss = torch.mean(torch.tensor(epoch_loss)).item()
-    with torch.autocast(device_type=device.type, dtype=torch.bfloat16, enabled=use_amp):
+    with torch.autocast(device_type=device.type, dtype=amp_data_type, enabled=use_amp):
         fraction_solved = fraction_of_solved_puzzles(gnn, testloader, code)
         test_loss = compute_accuracy(gnn, testloader, code)
         lerx, lerz, ler_tot = logical_error_rate(gnn, testloader, code)

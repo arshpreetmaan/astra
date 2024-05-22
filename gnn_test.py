@@ -18,10 +18,13 @@ from panq_functions import GNNDecoder, collate, fraction_of_solved_puzzles,compu
 
 if torch.cuda.is_available():
     device = torch.device('cuda:0')
-    use_amp=True
+    use_amp = True  #to use automatic mixed precision
+    amp_data_type = torch.float16
 else:
     device = torch.device('cpu')
     use_amp = False
+    '''float16 is not supported for cpu use bfloat16 instead'''
+    amp_data_type = torch.bfloat16
 
 d=11  # trained distance
 #plot_code(code)
@@ -47,7 +50,8 @@ msg_net_size = 512
 msg_net_dropout_p = 0.05
 gru_dropout_p = 0.05
 
-enable_osd=True
+""" to use the second stage decoder initialised with gnn's output llrs """
+enable_osd=False
 print("n_iters: ", n_iters, "n_node_outputs: ", n_node_outputs, "n_node_features: ", n_node_features,"n_edge_features: ", n_edge_features ,"enable mwpm similar to osd",enable_osd)
 
 fname = f"trained_models/d11_DP_30_500_500_500000_0.15_20000_0.05_0.0001_0.0001_512_0.05_0.05_"
@@ -91,7 +95,7 @@ with torch.no_grad():
         # osd_decoder = BeliefPropagationOSDDecoder(code, error_model, error_rate=err_rate, osd_order=0, max_bp_iter=0)
         mwpm_decoder = MatchingDecoder(code, error_model, error_rate=err_rate)
         # osd_decoder.initialize_decoders()
-        with torch.autocast(device_type=device.type, dtype=torch.float16, enabled = use_amp):
+        with torch.autocast(device_type=device.type, dtype=amp_data_type, enabled = use_amp):
             lerx, lerz, ler_tot = logical_error_rate(gnn, testloader, code, enable_osd=enable_osd, osd_decoder=mwpm_decoder)
         t2 = time.time()
         print("ler calculation", t2 - t1)
