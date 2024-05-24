@@ -394,10 +394,10 @@ def logical_error_rate(gnn, testloader, code, enable_osd=False, osd_decoder=None
             final_solution = torch.cat((final_solutionx, final_solutionz), dim=1)
             final_targets = torch.cat((final_targetsx, final_targetsz), dim=1)
 
-            ''' logical operator error '''
+
             rf = (final_targets + final_solution) % 2
-            l = np.any(code.logical_errors(rf) != 0, axis=1)
-            n_l_error += l.sum()
+            # l = np.any(code.logical_errors(rf) != 0, axis=1)
+            # n_l_error += l.sum()
 
             ''' codespace error '''
             ms = code.measure_syndrome(rf).T
@@ -405,8 +405,14 @@ def logical_error_rate(gnn, testloader, code, enable_osd=False, osd_decoder=None
             mse = np.any(ms, axis=1)
             n_codespace_error += mse.sum()
 
+            ''' logical operator error '''
+            msi = np.where(mse == 0)
+            l = np.any(code.logical_errors(rf[msi]) != 0, axis=1)
+            n_l_error += l.sum()
+
             ''' total logical error'''
-            n_total_ler += np.logical_or(l, mse).sum()
+            # n_total_ler += np.logical_or(l, mse).sum()
+            n_total_ler += mse.sum + l.sum()
             n_test += batch_size
 
         return (n_l_error / n_test), (n_codespace_error / n_test), n_total_ler/n_test
