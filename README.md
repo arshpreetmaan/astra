@@ -1,6 +1,11 @@
-# Graph Neural Network (GNN) Decoder
+# Astra: A Graph Neural Network (GNN) Decoder for QLDPC codes
 
-A graph neural network which works on the tanner graph of error correcting code. It learns to operate BP algorithm on that graph.  
+
+
+A graph neural network which works on the Tanner graph of the error correcting codes. **Astra** learns to operate the belief-propagation algorithm on that graph.
+
+Preliminary results of the decoder, when compared against Minimum Weight Perfect Matching
+
 Some remarks
 
     Required python version == 3.11  
