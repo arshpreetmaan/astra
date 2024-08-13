@@ -412,7 +412,7 @@ def logical_error_rate(gnn, testloader, code, enable_osd=False, osd_decoder=None
 
             ''' total logical error'''
             # n_total_ler += np.logical_or(l, mse).sum()
-            n_total_ler += mse.sum + l.sum()
+            n_total_ler += mse.sum() + l.sum()
             n_test += batch_size
 
         return (n_l_error / n_test), (n_codespace_error / n_test), n_total_ler/n_test
