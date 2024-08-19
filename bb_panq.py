@@ -45,7 +45,7 @@ size = 2 * d ** 2 - 1
 # list of hyperparameters
 n_node_inputs = 4
 n_node_outputs = 4
-n_iters = 30
+n_iters = 3
 n_node_features = 50
 n_edge_features = 50
 len_test_set = 20
@@ -114,7 +114,7 @@ fnameload = f"trained_models/BB_n288_k12_d18_from_d18_DP_45_50_50_40000_0.2_2000
 # fnameload = f"trained_models/BB_n72_k12_d6_DP_30_50_50_20000_0.15_1000_0.06_0.0001_0.001_128_0.05_0.05_gnn.pth 0.035_0.026_0.04 110"
 model_loaded = False
 if os.path.isfile(fnameload):
-    tools.load_model(gnn, fnameload, device)
+    load_model(gnn, fnameload, device)
     model_loaded = True
 
 # Generate the data

@@ -108,18 +108,16 @@ def collate(list_of_samples):
 
     Args:
       list_of_samples is a list of tuples (inputs, targets),
-          inputs of shape (n_nodes, 9): Inputs to each node in the graph. Inputs are one-hot coded digits
-              in the sudoku puzzle. A missing digit is encoded with all zeros. n_nodes=81 for the sudoku graph.
-          targets of shape (n_nodes): A LongTensor of targets (correct digits in the sudoku puzzle).
+          inputs of shape (n_nodes, n_node_inputs): Inputs to each node in the graph. Inputs are one-hot coded digits.
+          A missing digit is encoded with all zeros. n_nodes= nodes in the tanner graph
+          targets of shape (n_nodes): A LongTensor of targets (correct digits of tanner graph).
 
     Returns:
-      inputs of shape (batch_size*n_nodes, 9): Inputs to each node in the graph. Inputs are one-hot coded digits
-          in the sudoku puzzle. A missing digit is encoded with all zeros. n_nodes=81 for the sudoku graph.
-      targets of shape (batch_size*n_nodes): A LongTensor of targets (correct digits in the sudoku puzzle).
-      src_ids of shape (batch_size*1620): LongTensor of source node ids for each edge in the large graph.
-          The source ids should be between 0 and batch_size * 81.
-      dst_ids of shape (batch_size*1620): LongTensor of destination node ids for each edge in the large graph.
-          The destination ids should be between 0 and batch_size * 81.
+      inputs of shape (batch_size*n_nodes, n_node_inputs): Inputs to each node in the graph. Inputs are one-hot coded digits
+        for syndromes/errors similar to in the sudoku puzzle. A missing digit is encoded with all zeros.
+      targets of shape (batch_size*n_nodes): A LongTensor of targets (correct digits of tanner graph).
+      src_ids of shape (batch_size*nodes in the tanner graph): LongTensor of source node ids for each edge in the large graph.
+      dst_ids of shape (batch_size*nodes in the tanner graph): LongTensor of destination node ids for each edge in the large graph.
     """
     # YOUR CODE HERE
     (inp, target) = list_of_samples[0]
@@ -244,7 +242,6 @@ def generate_syndrome_error_volume(code, error_model, p, batch_size, for_trainin
 
     if for_training:
         # syndrome_error_volume = np.zeros((batch_size, size), dtype=int)
-        # TOD: check this potential bug - fixed
         rng = np.random.default_rng(1)
         # error = np.zeros((batch_size, size), dtype='uint8')
         # syndrome = error
@@ -339,144 +336,189 @@ def fraction_of_solved_puzzles(gnn, testloader, code):
 
     return n_test_solved / n_test
 
+def init_log_probs_of_decoder(decoder, my_log_probs):
+    #print("old ", decoder.log_prob_ratios)
 
-def logical_error_rate(gnn, testloader, code, enable_osd = False):
+    for i in range(len(decoder.log_prob_ratios)):
+        decoder.set_log_prob(i, my_log_probs[i])
+
+    #print("new ", decoder.log_prob_ratios)
+
+def logical_error_rate(gnn, testloader, code, osd_decoder=None, enable_osd=False):
+    #keep enable_osd = false during training
     size = 2 * code.N
     error_index = code.N
     gnn.eval()
     device = gnn.device
     with torch.no_grad():
-        n_test = 0
-        n_l_error = 0
-        n_codespace_error = 0
-        n_total_ler = 0
-        # nx_error = 0
-        # nz_error = 0
-        # zeros = torch.zeros(code.d ** 2)
-        # s = code.stabilizer_matrix.toarray()
-        # hx = code.Hx.toarray()
-        # hxperp = kernel(hx)[0]
-        # hz = code.Hz.toarray()
-        # hzperp = kernel(hz)[0]
-        # lx = code.logicals_x[:, :code.d ** 2]
-        # lz = code.logicals_z[:, code.d ** 2:]
+        n_test = 0#torch.tensor(0,dtype=torch.int,device=device)
+        n_l_error = 0#torch.tensor(0,dtype=torch.int,device=device)
+        n_codespace_error = 0#torch.tensor(0,dtype=torch.int,device=device)
+        n_total_ler = 0#torch.tensor(0,dtype=torch.int,device=device)
+        hx = torch.tensor(code.hx,dtype=torch.float16,device=device)
+        hz = torch.tensor(code.hz,dtype=torch.float16,device=device)
+        lx = torch.tensor(code.lx,dtype=torch.float16,device=device)
+        lz = torch.tensor(code.lz,dtype=torch.float16,device=device)
+
         for i, (inputs, targets, src_ids, dst_ids) in enumerate(testloader):
             inputs, targets = inputs.to(device), targets.to(device)
             src_ids, dst_ids = src_ids.to(device), dst_ids.to(device)
             # batch_size = inputs.size(0) // size
             outputs = gnn(inputs, src_ids, dst_ids)  # [n_iters, batch*n_nodes, 9]
             encoding = outputs.shape[-1]
-            if encoding == 1:
-                solution = outputs.view(gnn.n_iters, -1, size)
-                final_solution = torch.heaviside(solution[-1, :, error_index:], torch.tensor([1.0]))
+            if enable_osd:
+                # final_solution = osd(outputs,targets,code,osd_decoder)
+                n_l, n_c, n_t, batch_size = osd(outputs,targets,code,hx,hz,osd_decoder)
+                # solution = outputs.view(gnn.n_iters, -1, size, encoding)
+                # final_solution = solution[-1, :, error_index:].argmax(dim=2).cpu()
+
+                n_l_error += n_l
+                n_codespace_error += n_c
+                n_total_ler += n_t
+                n_test += batch_size
+
             else:
-                if enable_osd:
-                    final_solution = osd(outputs,targets,code)
-                else:
-                    solution = outputs.view(gnn.n_iters, -1, size, encoding)
-                    final_solution = solution[-1, :, error_index:].argmax(dim=2).cpu()
-            batch_size = final_solution.shape[0]
+                solution = outputs.view(gnn.n_iters, -1, size, encoding)
+                final_solution = solution[:, :, error_index:].argmax(dim=-1)
+                batch_size = final_solution.shape[1]
 
-            final_targets = targets.view(batch_size, size)[:, error_index:].cpu()
-            final_targetsx = torch.where(final_targets == 1, final_targets, 0) + torch.where(final_targets == 3, final_targets, 0) //3
-            final_targetsz = torch.where(final_targets == 2, final_targets, 0) // 2 + torch.where(final_targets == 3, final_targets, 0) //3
+                final_targets = targets.view(batch_size, size)[:, error_index:]
+                final_targetsx = torch.where(final_targets == 1, final_targets, 0) + torch.where(final_targets == 3,
+                                                                                                 final_targets, 0) // 3
+                final_targetsz = torch.where(final_targets == 2, final_targets, 0) // 2 + torch.where(final_targets == 3,
+                                                                                                      final_targets, 0) // 3
 
-            final_solutionx = torch.where(final_solution == 1, final_solution, 0) + torch.where(final_solution == 3, final_solution, 0) // 3
-            final_solutionz = torch.where(final_solution == 2, final_solution, 0) // 2 + torch.where(final_solution == 3, final_solution, 0) // 3
+                final_solutionx = torch.where(final_solution == 1, final_solution, 0) + torch.where(final_solution == 3,
+                                                                                                    final_solution, 0) // 3
+                final_solutionz = torch.where(final_solution == 2, final_solution, 0) // 2 + torch.where(
+                    final_solution == 3, final_solution, 0) // 3
 
-            # final_solution = torch.cat((final_solutionx, final_solutionz), dim=1)
-            # final_targets = torch.cat((final_targetsx, final_targetsz), dim=1)
+                # final_solution = torch.cat((final_solutionx, final_solutionz), dim=1)
+                # final_targets = torch.cat((final_targetsx, final_targetsz), dim=1)
+                n_iters = final_solution.shape[0]
+                final_targetsx = final_targetsx.unsqueeze(0).repeat(n_iters, 1, 1)
+                final_targetsz = final_targetsz.unsqueeze(0).repeat(n_iters, 1, 1)
 
-            # rf = (final_targets + final_solution) % 2
-            # l = code.logical_errors(rf)
-            # n_l_error += np.any(l != 0, axis=1).sum()
-            #
-            # ms = code.measure_syndrome(rf).T
-            # n_codespace_error += batch_size - np.all(ms == 0, axis=1).sum()
-            # n_test += batch_size
+                rfx = ((final_targetsx + final_solutionx) % 2).type(torch.float16)
+                rfz = ((final_targetsz + final_solutionz) % 2).type(torch.float16)
 
-            rfx = np.array((final_targetsx + final_solutionx) % 2)
-            rfz = np.array((final_targetsz + final_solutionz) % 2)
-            l = np.append((rfx @ code.lz.T) % 2,(rfz @ code.lx.T) % 2 , axis =1)
-            # lx = np.any((rfx @ code.hx_perp.T) % 2,axis=1).sum()
-            # lz = np.any((rfz @ code.hz_perp.T) % 2,axis=1).sum()
-            l = np.any(l,axis=1)
-            n_l_error += l.sum()
+                # rfx = rfx.reshape(-1, rfx.shape[-1])
+                # ms = np.append((rfx.reshape(-1, rfx.shape[-1]) @ code.hz.T) % 2, (rfz.reshape(-1, rfz.shape[-1]) @ code.hx.T) % 2, axis=-1)
+                # ms = ms.reshape(n_iters, batch_size, -1)
+                # mseitr = np.any(ms, axis=2)
+                # n_codespace_error += mseitr.sum(axis=-1).min()
 
-            ms = np.append((rfx @ code.hz.T) % 2,(rfz @ code.hx.T) % 2,axis=1)
-            mse = np.any(ms,axis=1)
-            n_codespace_error += mse.sum()
+                ms = torch.cat(((rfx @ hz.T) % 2,(rfz @ hx.T) % 2),dim=-1).type(torch.int)
+                mseitr = torch.any(ms, axis=2)
+                minitr = torch.argmin(mseitr.sum(axis=-1))
+                mse = mseitr[minitr]
+                n_codespace_error += mse.sum().item()
 
-            n_total_ler += np.logical_or(l, mse).sum()
-            n_test += batch_size
 
-        return (n_l_error / n_test), (n_codespace_error / n_test), n_total_ler / n_test
+                # minitr = np.argmin(mseitr.sum(axis=-1))
+                # msi = np.where(mseitr[minitr] == 0)
 
-def osd(outputs, targets, code):
-    size = 2 * code.d ** 2 - 1
-    error_index = code.d ** 2 - 1
+                # l = np.append((rfx[minitr][msi] @ code.lz.T) % 2, (rfz[minitr][msi] @ code.lx.T) % 2, axis=-1)
+                # l = np.any(l, axis=1)
+                # n_l_error += l.sum()
+
+                l = torch.cat(((rfx[minitr] @ lz.T) % 2, (rfz[minitr] @ lx.T) % 2), dim=-1).type(torch.int)
+                l = torch.any(l, axis=1)
+                n_l_error += l.sum().item()
+
+                n_total_ler += torch.logical_or(l, mse).sum().item()
+                # n_total_ler += l.sum() + mse.sum()
+                n_test += batch_size
+        # n_total_ler = (n_l_error + n_codespace_error)
+        return (n_l_error / n_test), (n_codespace_error / n_test), (n_total_ler/n_test)
+
+def osd(outputs, targets, code,hx,hz, osd_decoder=None):
+    size = 2 * code.N
+    error_index = code.N
     # n_iters=out.shape[0]
     encoding = outputs.shape[-1]
-    if encoding==1:
-        None
-    else:
-        solution = outputs.view(outputs.shape[0], -1, size, encoding)
-        # final_solution = solution[-1, :, error_index:].argmax(dim=2).cpu()
-        final_solution = nn.functional.softmax(solution[-1,:, error_index:], dim=2).cpu()
-        fllr = final_solution[:, :, 1]
+    solution = outputs.view(GNNDecoder.n_iters, -1, size, encoding)
+    final_solution = solution[:, :, error_index:].argmax(dim=-1)
+    batch_size = final_solution.shape[1]
 
-        #osd test
-        # error_model = PauliErrorModel(1, 0.0, 0.0)
-        # bposd = BeliefPropagationOSDDecoder(code, error_model, error_rate=0.1,osd_order=0,max_bp_iter=0)
-        # gnnosd=bposd.aalto_osd()
+    final_targets = targets.view(batch_size, size)[:, error_index:]
+    final_targetsx = torch.where(final_targets == 1, final_targets, 0) + torch.where(final_targets == 3,
+                                                                                     final_targets, 0) // 3
+    final_targetsz = torch.where(final_targets == 2, final_targets, 0) // 2 + torch.where(final_targets == 3,
+                                                                                          final_targets, 0) // 3
 
-        # final_solution = nn.functional.sigmoid(solution[-1, :, error_index:]).cpu()
-        # fllr = torch.log(final_solution[:, :, 1] / final_solution[:, :, 0])  # negative llr
-        final_solution = solution[-1, :, error_index:].argmax(dim=2).cpu()
-        batch_size = final_solution.shape[0]
-        hx = code.Hx.toarray()
-        hz = code.Hz.toarray()
+    final_solutionx = torch.where(final_solution == 1, final_solution, 0) + torch.where(final_solution == 3,
+                                                                                        final_solution, 0) // 3
+    final_solutionz = torch.where(final_solution == 2, final_solution, 0) // 2 + torch.where(
+        final_solution == 3, final_solution, 0) // 3
 
-        final_targets = targets.view(batch_size, size).cpu()
-        final_syn = np.array((targets.view(batch_size, size)[:, :error_index]).cpu())
-        # og = np.argsort(fllr[3])[::-1]
-        r = (final_targets[:, error_index:] + final_solution) % 2
-        zer = torch.zeros(batch_size, code.d ** 2)
-        rf = torch.cat((r, zer), dim=1)
-        ms = code.measure_syndrome(rf).T
-        nonzero_syn_id = np.nonzero(1 - np.all(ms == 0, axis=1))[0]
+    # final_solution = torch.cat((final_solutionx, final_solutionz), dim=1)
+    # final_targets = torch.cat((final_targetsx, final_targetsz), dim=1)
+    n_iters = final_solution.shape[0]
+    final_targetsx = final_targetsx.unsqueeze(0).repeat(n_iters, 1, 1)
+    final_targetsz = final_targetsz.unsqueeze(0).repeat(n_iters, 1, 1)
 
-        osd_out = np.array(final_solution)
+    # gpu part
+    rfx = ((final_targetsx + final_solutionx) % 2).type(torch.float16)
+    rfz = ((final_targetsz + final_solutionz) % 2).type(torch.float16)
 
-        # og_np = np.array(np.argsort(fllr[nonzero_syn_id]))[:, ::-1]
-        # hz_np = np.full((nonzero_syn_id.shape[0],hz.shape[0],hz.shape[1]),fill_value=hz)
-        # # hzog_np = np.transpose(hz_np[:, og_np, :][0], axes=(0, 2, 1))
-        # hzog_np = np.transpose(hz_np[:,:,og_np][0],axes=[1,0,2])
-        # for i in range(batch_size):
-        #     if not code.in_codespace(rf[i]):
-        for i in nonzero_syn_id:
-            # og = np.argsort(fllr[i])  #decending
-            og = np.argsort(np.array(fllr[i]))[::-1] #ascending
-            hzog = hz[:, og]
-            _, indli = sympy.Matrix(hzog).rref()
-            indli = np.array(indli)
-            hzli = hzog[:, indli]
-            osd_indli = ((np.linalg.inv(hzli) ) @ final_syn[i,:error_index//2] ) % 2
-            osd_err = np.zeros(code.d**2)
-            osd_err[og[indli]] = osd_indli
-            osd_out[i] = osd_err
-            # res = (osd_err + final_targets[i]) % 2
+    ms = torch.cat(((rfx @ hz.T) % 2, (rfz @ hx.T) % 2), dim=-1).type(torch.int)
+    mseitr = torch.any(ms, axis=2)
+    minitr = torch.argmin(mseitr.sum(axis=-1))
+    mse = np.array(mseitr[minitr].type(torch.int).cpu())
+    nonzero_syn_id = np.nonzero(mse.astype("uint8"))[0]
+    # cpu part
 
-        # r = (final_targets + osd_out) % 2
-        # zer = torch.zeros(batch_size, code.d ** 2)
-        # rf = torch.cat((r, zer), dim=1)
-        # l = code.logical_errors(rf)
-        # n_x_error = np.any(l != 0, axis=1).sum()
-        #
-        # ms = code.measure_syndrome(rf)
-        # n_z_error = batch_size - np.all(ms == 0, axis=0).sum()
-        # n_test = batch_size
-    return osd_out
+    # rfx = np.array(((final_targetsx + final_solutionx) % 2).type(torch.int).cpu())
+    # rfz = np.array(((final_targetsz + final_solutionz) % 2).type(torch.int).cpu())
+    #
+    # ms = np.append((rfx @ code.hz.T) % 2, (rfz @ code.hx.T) % 2, axis=-1)
+    # mseitr = np.any(ms, axis=2)
+    # minitr = np.argmin(mseitr.sum(axis=-1))
+    # mse = mseitr[minitr]
+    # nonzero_syn_id = np.nonzero(mse.astype("uint8"))[0]
+
+    #cpu part
+    final_solution = np.array(nn.functional.softmax(solution[minitr, :, error_index:], dim=2).cpu())
+
+    fllrx = np.log((final_solution[:, :, 1] + final_solution[:, :, 3]) / final_solution[:, :, 0])  # works better
+    fllrz = np.log((final_solution[:, :, 2] + final_solution[:, :, 3]) / final_solution[:, :, 0])
+
+
+    final_syn = np.array((targets.view(batch_size, size)[:, :error_index]).cpu())
+    final_syn = np.append(final_syn[:,:error_index//2],final_syn[:,error_index//2:]//2 , axis = 1)
+
+    # final_solution = solution[minitr, :, error_index:].argmax(dim=2)
+    # osd_out = np.array(final_solution.cpu())
+    osd_err_x = np.array(final_solutionx[minitr].cpu())
+    osd_err_z = np.array(final_solutionz[minitr].cpu())
+
+    for i in nonzero_syn_id:
+        # dec = decoder(code,mwpm_decoder.error_model,mwpm_decoder.error_rate,weights=(fllrx[i],fllrz[i]))
+        init_log_probs_of_decoder(x_decoder, fllrx[i])    # x with z originally
+        init_log_probs_of_decoder(z_decoder, fllrz[i])
+        # init_log_probs_of_decoder(osd_decoder.x_decoder, fnllr_sig[i])
+        osd_err_x[i] = x_decoder.decode(final_syn[i,:error_index//2])
+        osd_err_z[i] = z_decoder.decode(final_syn[i,error_index//2:])
+
+    rfx = ((np.array(final_targetsx[0].cpu()) + osd_err_x) % 2)
+    rfz = ((np.array(final_targetsz[0].cpu()) + osd_err_z) % 2)
+
+    ms = np.append((rfx @ code.hz.T) % 2, (rfz @ code.hx.T) % 2, axis=-1)
+    mse = np.any(ms, axis=1)
+    n_codespace_error = mse.sum()
+
+    l = np.append((rfx @ code.lz.T) % 2, (rfz @ code.lx.T) % 2, axis=-1)
+    l = np.any(l, axis=1)
+    n_l_error = l.sum()
+
+    n_total_ler = np.logical_or(l, mse).sum()
+    # n_total_ler = n_l_error
+    # n_codespace_error = 0
+    # n_total_ler += l.sum() + mse.sum()
+    n_test = batch_size
+
+    return n_l_error, n_codespace_error , n_total_ler, n_test
 
 def ler_loss(out, targets, code):
     size = 2 * code.N
@@ -484,103 +526,36 @@ def ler_loss(out, targets, code):
     device = out.device
     # n_iters=out.shape[0]
     encoding = out.shape[-1]
-    if encoding == 1:
-        solution = (out.view(-1, size))
-        zeros = torch.zeros(code.d ** 2).long()
-        final_solution = nn.functional.sigmoid(solution[:, error_index:])
-        batch_size = final_solution.shape[0]
-        ax = 0
-        az = 0
-        msx = 0
-        msz = 0
-        ms = 0
-        sloss = 0
-        eloss = 0
-        s = code.stabilizer_matrix.toarray()
-        final_targets = targets.view(batch_size, size)[:, error_index:]
-        s_out = nn.functional.sigmoid(solution[:, :error_index])
-        s_target = targets.view(batch_size, size)[:, :error_index]
-        for j in range(batch_size):
-            correction = final_solution[j, :]
-            error = final_targets[j, :]
-            # residual = (torch.abs(torch.sin(torch.pi*(correction + error)/2)))
-            # residualx = (correction + error)
-            #
-            # # residualx = torch.cat((residualx, zeros))
-            # residualx = residualx.reshape(1, residualx.shape[0])
-            # residualx = (torch.abs(torch.sin(torch.pi * residualx / 2)))
+    # outputs = gnn(inputs, src_ids, dst_ids)  # [n_iters, batch*n_nodes, 9]
+    solution = (out.view(-1, size, encoding))
+    final_solution = nn.functional.softmax(solution[:, error_index:, :], dim=2)
+    # final_solution =  nn.functional.sigmoid(solution[:, error_index:, :])
+    batch_size = final_solution.shape[0]
+    # ax = 0
+    # az = 0
+    msx = 0
+    msz = 0
+    #hx = code.Hx.toarray()
+    #hxperp = torch.FloatTensor(kernel(hx)[0]).to(device)
+    hxperp= GNNDecoder.hxperp
+    #hz = code.Hz.toarray()
+    #hzperp = torch.FloatTensor(kernel(hz)[0]).to(device)
+    hzperp = GNNDecoder.hzperp
+    # lz = torch.Tensor(code.logicals_z)
+    # # residual = torch.tensor([0.0], requires_grad=True)
+    final_targets = targets.view(batch_size, size)[:, error_index:]
+    final_targetsx = torch.where(final_targets == 1, final_targets, 0) + torch.where(final_targets == 3, final_targets, 0) // 3
+    final_targetsz = torch.where(final_targets == 2, final_targets, 0) // 2 + torch.where(final_targets == 3, final_targets, 0) // 3
 
-            residual= correction+error
-            residual= torch.cat((residual, zeros))
-            residual = residual.reshape(1, residual.shape[0])
-            residual = (torch.abs(torch.sin(torch.pi * residual / 2)))
+    rx = final_targetsx + final_solution[:, :, 1] + final_solution[:, :, 3]
+    rfx = (torch.abs(torch.sin(torch.pi * rx / 2)))
+    msx_batch = torch.mean(torch.abs(torch.sin(torch.pi * ((rfx @ hxperp.T)) / 2)), dim=1)
+    msx = msx_batch.sum()
 
-            residualx = residual[:,:code.d**2]
-            residualz = residual[:,code.d**2:]
-            # t=torch.tensor(s).long() @  torch.cat((error, zeros))
-            # t=(torch.tensor(s).float()[:,code.d**2:] @ residualx.T)
-
-            # total_error=torch.cat((error, zeros))
-            # code.logical_errors(residual)
-            # torch.LongTensor(code.logicals_z) @ total_error
-            ax += (torch.abs(torch.sin(torch.pi * (torch.Tensor(code.logicals_z).float()[:,
-                                                   code.d ** 2:] @ residualx.T) / 2)))  # calculating logical x error manually
-            msx += torch.mean(torch.abs(torch.sin(
-                torch.pi * (torch.Tensor(s).float()[:, code.d ** 2:] @ residualx.T) / 2)))  # measuring X syndromes
-            # he= (torch.Tensor(s).float()[:, code.d ** 2:] @ residualx.T) + (torch.Tensor(s).float()[:, :code.d ** 2] @ residualz.T)
-            # ms += torch.mean(torch.abs(torch.sin(torch.pi * (he) / 2)))
-            # az += (torch.abs(torch.sin(torch.pi*(torch.LongTensor(code.logicals_x)[:,code.d**2:] @ residual.T)/2)))
-            s_residual = s_out[j, :] + s_target[j, :]
-            sloss += torch.mean(torch.abs(torch.sin(torch.pi * s_residual / 2)))
-
-    else:
-        # outputs = gnn(inputs, src_ids, dst_ids)  # [n_iters, batch*n_nodes, 9]
-        solution = (out.view(-1, size, encoding))
-        # zeros = torch.zeros(code.d ** 2,device=device)
-        # final_solution = solution[:, : syndrome_index, :].argmax(dim=2)
-        # final_solution = nn.functional.softmax(solution[:, : syndrome_index, :], dim=2)[:,:,1]
-        final_solution = nn.functional.softmax(solution[:, error_index:, :], dim=2)
-        # final_solution =  nn.functional.sigmoid(solution[:, error_index:, :])
-        batch_size = final_solution.shape[0]
-        # ax = 0
-        # az = 0
-        msx = 0
-        msz = 0
-        # ms = 0
-        # sloss = 0
-        # eloss = 0
-        # s = code.stabilizer_matrix.toarray()
-        #hx = code.Hx.toarray()
-        #hxperp = torch.FloatTensor(kernel(hx)[0]).to(device)
-        hxperp= GNNDecoder.hxperp
-        #hz = code.Hz.toarray()
-        #hzperp = torch.FloatTensor(kernel(hz)[0]).to(device)
-        hzperp = GNNDecoder.hzperp
-        # lz = torch.Tensor(code.logicals_z)
-        # # residual = torch.tensor([0.0], requires_grad=True)
-        final_targets = targets.view(batch_size, size)[:, error_index:]
-        final_targetsx = torch.where(final_targets == 1, final_targets, 0) + torch.where(final_targets == 3, final_targets, 0) // 3
-        final_targetsz = torch.where(final_targets == 2, final_targets, 0) // 2 + torch.where(final_targets == 3, final_targets, 0) // 3
-        # s_out = nn.functional.softmax(solution[:, :error_index, :], dim=2)
-        # s_out = nn.functional.sigmoid(solution[:, :error_index, :])
-        # s_target = targets.view(batch_size, size)[:, :error_index]
-
-        # rx = final_targets + final_solution[:,:,1]
-        # rfx = (torch.abs(torch.sin(torch.pi * rx / 2)))
-        # # zer = torch.zeros(batch_size, code.d ** 2)
-        # # rf = torch.cat((r, zer), dim=1)
-        # msx_batch = torch.mean(torch.abs(torch.sin(torch.pi * ((rfx @ hxperp.T)) / 2)),dim=1)
-        # msx = msx_batch.sum()
-
-        rx = final_targetsx + final_solution[:, :, 1] + final_solution[:, :, 3]
-        rfx = (torch.abs(torch.sin(torch.pi * rx / 2)))
-        msx_batch = torch.mean(torch.abs(torch.sin(torch.pi * ((rfx @ hxperp.T)) / 2)), dim=1)
-        msx = msx_batch.sum()
-
-        rz = final_targetsz + final_solution[:, :, 2] + final_solution[:, :, 3]
-        rfz = (torch.abs(torch.sin(torch.pi * rz / 2)))
-        msz_batch = torch.mean(torch.abs(torch.sin(torch.pi * ((rfz @ hzperp.T)) / 2)), dim=1)
-        msz = msz_batch.sum()
+    rz = final_targetsz + final_solution[:, :, 2] + final_solution[:, :, 3]
+    rfz = (torch.abs(torch.sin(torch.pi * rz / 2)))
+    msz_batch = torch.mean(torch.abs(torch.sin(torch.pi * ((rfz @ hzperp.T)) / 2)), dim=1)
+    msz = msz_batch.sum()
 
 
     # loss=nn.functional.cross_entropy(out,targets)

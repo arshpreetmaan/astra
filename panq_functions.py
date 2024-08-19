@@ -114,7 +114,7 @@ def collate(list_of_samples):
 
     Returns:
       inputs of shape (batch_size*n_nodes, n_node_inputs): Inputs to each node in the graph. Inputs are one-hot coded digits
-          in the sudoku puzzle. A missing digit is encoded with all zeros.
+          for syndromes/errors similar to in the sudoku puzzle. A missing digit is encoded with all zeros.
       targets of shape (batch_size*n_nodes): A LongTensor of targets (correct digits of tanner graph).
       src_ids of shape (batch_size*nodes in the tanner graph): LongTensor of source node ids for each edge in the large graph.
       dst_ids of shape (batch_size*nodes in the tanner graph): LongTensor of destination node ids for each edge in the large graph.
@@ -291,55 +291,6 @@ def fraction_of_solved_puzzles(gnn, testloader, code):
             n_test_solved += solved.sum().item()
 
     return n_test_solved / n_test
-
-
-# def logical_error_rate(gnn, testloader, code):
-#     size = 2 * code.d ** 2 - 1
-#     error_index = code.d ** 2 - 1
-#     gnn.eval()
-#     device = gnn.device
-#     with torch.no_grad():
-#         n_test = 0
-#         n_l_error = 0
-#         n_codespace_error = 0
-#         n_total_ler = 0
-#         for i, (inputs, targets, src_ids, dst_ids) in enumerate(testloader):
-#             inputs, targets = inputs.to(device), targets.to(device)
-#             src_ids, dst_ids = src_ids.to(device), dst_ids.to(device)
-#             # batch_size = inputs.size(0) // size
-#             outputs = gnn(inputs, src_ids, dst_ids)  # [n_iters, batch*n_nodes, 9]
-#             encoding = outputs.shape[-1]
-#
-#             solution = outputs.view(gnn.n_iters, -1, size, encoding)
-#             final_solution = solution[-1, :, error_index:].argmax(dim=2).cpu()
-#
-#             batch_size = final_solution.shape[0]
-#
-#             final_targets = targets.view(batch_size, size)[:, error_index:].cpu()
-#             final_targetsx = torch.where(final_targets == 1, final_targets, 0) + torch.where(final_targets == 3, final_targets, 0) //3
-#             final_targetsz = torch.where(final_targets == 2, final_targets, 0) // 2 + torch.where(final_targets == 3, final_targets, 0) //3
-#
-#             final_solutionx = torch.where(final_solution == 1, final_solution, 0) + torch.where(final_solution == 3, final_solution, 0) // 3
-#             final_solutionz = torch.where(final_solution == 2, final_solution, 0) // 2 + torch.where(final_solution == 3, final_solution, 0) // 3
-#
-#             final_solution = torch.cat((final_solutionx, final_solutionz), dim=1)
-#             final_targets = torch.cat((final_targetsx, final_targetsz), dim=1)
-#
-#             ''' logical operator error '''
-#             rf = (final_targets + final_solution) % 2
-#             l = np.any(code.logical_errors(rf) != 0, axis=1)
-#             n_l_error += l.sum()
-#
-#             ''' codespace error '''
-#             ms = code.measure_syndrome(rf).T
-#             # n_codespace_error += batch_size - np.all(ms == 0, axis=1).sum()
-#             mse = np.any(ms, axis=1)
-#             n_codespace_error += mse.sum()
-#
-#             n_total_ler += np.logical_or(l, mse).sum()
-#             n_test += batch_size
-#
-#         return (n_l_error / n_test), (n_codespace_error / n_test), n_total_ler / n_test
 
 def init_log_probs_of_decoder(decoder, my_log_probs):
     #print("old ", decoder.log_prob_ratios)
