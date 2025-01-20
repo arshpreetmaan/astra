@@ -477,6 +477,46 @@ def ler_loss(out, targets, code):
 
     return n_l_error / batch_size
 
+def ler_loss_itr(outputs, targets, code):
+    size = 2 * code.d ** 2 - 1
+    error_index = code.d ** 2 - 1
+    device = outputs.device
+    # n_iters=out.shape[0]
+    encoding = outputs.shape[-1]
+    n_iters = outputs.shape[0]
+
+    # outputs = gnn(inputs, src_ids, dst_ids)  # [n_iters, batch*n_nodes, 9]
+    solution = outputs.view(n_iters, -1, size, encoding)
+    final_solution = nn.functional.softmax(solution[:, :, error_index:,:],dim=-1)
+    batch_size = final_solution.shape[1]
+
+    final_targets = targets.view(batch_size, size)[:, error_index:]
+    final_targetsx = torch.where(final_targets == 1, final_targets, 0) + torch.where(final_targets == 3,
+                                                                                     final_targets, 0) // 3
+    final_targetsz = torch.where(final_targets == 2, final_targets, 0) // 2 + torch.where(
+        final_targets == 3,
+        final_targets, 0) // 3
+
+
+    final_targetsx = final_targetsx.unsqueeze(0).repeat(n_iters, 1, 1)
+    final_targetsz = final_targetsz.unsqueeze(0).repeat(n_iters, 1, 1)
+
+    hxperp = GNNDecoder.hxperp
+    hzperp = GNNDecoder.hzperp
+
+    rx = final_targetsx + final_solution[:,: , :, 1] + final_solution[:,:, :, 3]
+    rfx = (torch.abs(torch.sin(torch.pi * rx / 2)))
+    msx_itrs = torch.sum(torch.mean(torch.abs(torch.sin(torch.pi * ((rfx @ hxperp.T)) / 2)), dim=-1),dim=-1)
+    # msx = msx_batch.sum()
+
+    rz = final_targetsz + final_solution[:,:, :, 2] + final_solution[:,:, :, 3]
+    rfz = (torch.abs(torch.sin(torch.pi * rz / 2)))
+    msz_itrs = torch.sum(torch.mean(torch.abs(torch.sin(torch.pi * ((rfz @ hzperp.T)) / 2)), dim=-1),dim=-1)
+    # msz = msz_batch.sum()
+
+    n_l_error = (msx_itrs + msz_itrs).sum()
+    return n_l_error / batch_size #+ loss
+
 def compute_accuracy(gnn, testloader, code):
     gnn.eval()
     size = 2 * code.d ** 2 - 1
@@ -513,6 +553,94 @@ def compute_accuracy(gnn, testloader, code):
         losses = torch.mean(torch.tensor(losses)).item()
     return losses
 
+def calc_test_losses(gnn, testloader, code):
+    gnn.eval()
+    size = 2 * code.d ** 2 - 1
+    error_index = code.d ** 2 - 1
+    # device = torch.device('cpu')
+    device = gnn.device
+    criterion = nn.CrossEntropyLoss()
+    with torch.no_grad():
+        n_test_frac = 0
+        n_test_solved = 0
+        losses = []
+        n_test = 0
+        n_l_error = 0
+        n_codespace_error = 0
+        n_total_ler = 0
+        for i, (inputs, targets, src_ids, dst_ids) in enumerate(testloader):
+            inputs, targets = inputs.to(device), targets.to(device)
+            src_ids, dst_ids = src_ids.to(device), dst_ids.to(device)
+
+            outputs = gnn(inputs, src_ids, dst_ids)
+            encoding = outputs.shape[-1]
+            batch_size = inputs.size(0) // size
+
+            """ fraction solved"""
+            if encoding == 1:
+                solution = outputs.view(gnn.n_iters, -1, size)
+                final_solution = torch.heaviside(solution[-1], torch.tensor([1.0]))
+
+            else:
+                solution = outputs.view(gnn.n_iters, batch_size, size, -1)
+                final_solution = solution[-1].argmax(dim=2)
+            # solved = (final_solution.view(-1, size) == targets.view(batch_size, size)).all(dim=1)
+            solved = ((final_solution.view(-1, size))[:, :error_index] == (targets.view(batch_size, size))[:,
+                                                                          :error_index]).all(dim=1)
+            n_test_frac += solved.size(0)
+            n_test_solved += solved.sum().item()
+
+            """ compute accuracy"""
+            loss = 0
+            ler_loss_all_itr = ler_loss_itr(outputs, targets, code)
+
+            for j, out in enumerate(outputs):
+                celoss = criterion(out, targets)
+                loss += celoss
+                # torch.cuda.nvtx.range_pop()
+            loss += ler_loss_all_itr
+            loss /= outputs.shape[0]
+            losses.append(loss.detach())
+
+            """ logical error rate"""
+            solution = outputs.view(gnn.n_iters, -1, size, encoding)
+            final_solution = solution[-1, :, error_index:].argmax(dim=2).cpu()
+            batch_size = final_solution.shape[0]
+
+            final_targets = targets.view(batch_size, size)[:, error_index:].cpu()
+            final_targetsx = torch.where(final_targets == 1, final_targets, 0) + torch.where(final_targets == 3,
+                                                                                             final_targets, 0) // 3
+            final_targetsz = torch.where(final_targets == 2, final_targets, 0) // 2 + torch.where(final_targets == 3,
+                                                                                                  final_targets, 0) // 3
+
+            final_solutionx = torch.where(final_solution == 1, final_solution, 0) + torch.where(final_solution == 3,
+                                                                                                final_solution, 0) // 3
+            final_solutionz = torch.where(final_solution == 2, final_solution, 0) // 2 + torch.where(final_solution == 3,
+                                                                                                     final_solution, 0) // 3
+
+            final_solution = torch.cat((final_solutionx, final_solutionz), dim=1)
+            final_targets = torch.cat((final_targetsx, final_targetsz), dim=1)
+
+            rf = (final_targets + final_solution) % 2
+            l = np.any(code.logical_errors(rf) != 0, axis=1)
+            n_l_error += l.sum()
+
+            ms = code.measure_syndrome(rf).T
+            # n_codespace_error += batch_size - np.all(ms == 0, axis=1).sum()
+            mse = np.any(ms, axis=1)
+            n_codespace_error += mse.sum()
+
+            n_total_ler += np.logical_or(l, mse).sum()
+            n_test += batch_size
+
+
+
+    fraction_solved = n_test_solved / n_test_frac
+    losses = torch.mean(torch.tensor(losses)).item()
+    lerx = (n_l_error / n_test)
+    lerz = (n_codespace_error / n_test)
+    ler_tot = (n_total_ler / n_test)
+    return fraction_solved,losses,lerx,lerz,ler_tot
 
 def save_model(model, filename, confirm=True):
     if confirm:
