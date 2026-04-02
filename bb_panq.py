@@ -42,17 +42,19 @@ elif (error_model_name == "DP"):
 
 size = 2 * d ** 2 - 1
 #test_err_rate = 0.05
-# list of hyperparameters
+""" List of hyper-parameters.
+ On new setup (machine, GPU, package versions etc) user would need to do some hyper-parameter tuning on their end to find optimal parameters. 
+ """
 n_node_inputs = 4
 n_node_outputs = 4
-n_iters = 3
+n_iters = 30
 n_node_features = 50
 n_edge_features = 50
-len_test_set = 20
-test_err_rate = 0.10
+len_test_set = 5000
+test_err_rate = 0.05
 
 len_train_set = len_test_set * 20
-max_train_err_rate = 0.18
+max_train_err_rate = 0.15
 
 lr = 0.0001
 weight_decay = 0.0001
@@ -69,7 +71,7 @@ print("n_iters: ", n_iters, "n_node_outputs: ", n_node_outputs, "n_node_features
       "n_edge_features: ", n_edge_features)
 print( "msg_net_size: ",msg_net_size,"msg_net_dropout_p: ",msg_net_dropout_p,"gru_dropout_p: ",gru_dropout_p)
 print("learning rate: ", lr, "weight decay: ", weight_decay, "len train set: ",len_train_set,'max train error rate: ',max_train_err_rate,"len test set: ",len_test_set,"test error rate: ",test_err_rate)
-print("loss = ler loss + sloss ")
+# print("loss = ler loss + sloss ")
 
 """
     Create the Surface code
@@ -85,8 +87,8 @@ dist = d
 # [[288,12,18]]
 # code, A_list, B_list = create_bivariate_bicycle_codes(12, 12, [3], [2,7], [1,2], [3])
 code = bb_code(dist)
-d = 18
-dist = d
+# d = 18
+# dist = d
 # dist = 12
 print('trained', d, '\t retrain', dist, "\tcode name :",code.name)
 
@@ -109,9 +111,9 @@ GNNDecoder.device = device
 
 total_params = sum(param.numel() for param in gnn.parameters())
 
-fnameload = f"trained_models/BB_n288_k12_d18_from_d18_DP_45_50_50_40000_0.2_2000_0.1_0.0001_0.0001_128_0.05_0.05_gnn.pth 0.041_0.043_0.0435 100"
-# fnameload = f"trained_models/BB_n72_k12_d6_from_d6_DP_30_50_50_20000_0.15_1000_0.06_0.0001_0.001_128_0.05_0.05_gnn.pth 0.041_0.015_0.041 27"
+fnameload = f""
 # fnameload = f"trained_models/BB_n72_k12_d6_DP_30_50_50_20000_0.15_1000_0.06_0.0001_0.001_128_0.05_0.05_gnn.pth 0.035_0.026_0.04 110"
+
 model_loaded = False
 if os.path.isfile(fnameload):
     load_model(gnn, fnameload, device)
@@ -151,7 +153,8 @@ scheduler = optim.lr_scheduler.StepLR(optimizer,step_size=lr_reduce_epoch_step,g
 scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
 epochs = 10000
-batch_size = 16
+"""Adjust the batch size based on the GPU memory available - this might affect other optimal hyper-parameters (len_train_set, etc), thus in turn requires some hyper-parameter tuning on users end. """
+batch_size = 64
 criterion = nn.CrossEntropyLoss()
 losses = []
 test_losses = []
@@ -178,9 +181,9 @@ fname_traning_data=""
 #     raise Exception("Required training data too large!!!")
 
 # training_data = np.load(fname_traning_data, mmap_mode="r")
-trainset = adapt_trainset(generate_syndrome_error_volume(code, error_model, p=max_train_err_rate, batch_size=len_train_set),
-                          code, num_classes=n_node_inputs)
-trainloader = DataLoader(trainset, batch_size=batch_size, collate_fn=collate, shuffle=True)
+# trainset = adapt_trainset(generate_syndrome_error_volume(code, error_model, p=max_train_err_rate, batch_size=len_train_set),
+#                           code, num_classes=n_node_inputs)
+# trainloader = DataLoader(trainset, batch_size=batch_size, collate_fn=collate, shuffle=True)
 
 for epoch in range(epochs):
     gnn.train()
@@ -189,9 +192,10 @@ for epoch in range(epochs):
     # print(epoch)
     # trainset = np.copy(training_data[len_train_set*epoch:len_train_set*(epoch+1),:])
     # trainset = adapt_trainset(trainset,code,num_classes=n_node_inputs)
-    # trainset = adapt_trainset(generate_syndrome_error_volume(code, error_model, p=max_train_err_rate, batch_size=len_train_set),
-    #                           code, num_classes=n_node_inputs)
-    # trainloader = DataLoader(trainset, batch_size=batch_size, collate_fn=collate, shuffle=False)
+    """ generate new training data for each epoch - to see more samples. This was the option used in paper(for larger distances) i.e. training in the unlimited data regime """
+    trainset = adapt_trainset(generate_syndrome_error_volume(code, error_model, p=max_train_err_rate, batch_size=len_train_set),
+                              code, num_classes=n_node_inputs)
+    trainloader = DataLoader(trainset, batch_size=batch_size, collate_fn=collate, shuffle=False)
     epoch_loss = []
     for i, (inputs, targets, src_ids, dst_ids) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)
@@ -256,7 +260,7 @@ for epoch in range(epochs):
 
     if epoch % 10==0:
         np.save(fnamenew+f'training_lers_and_losses',le_rates)
-        save_model(gnn, fnamenew + f'gnn.pth {lerx}_{lerz}_{ler_tot} {epoch}', confirm=False)
+        # save_model(gnn, fnamenew + f'gnn.pth {lerx}_{lerz}_{ler_tot} {epoch}', confirm=False)
 
     if lerz == 0:
         min_lerz = lerz

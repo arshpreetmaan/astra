@@ -45,16 +45,18 @@ elif (error_model_name == "XZ"):
 elif (error_model_name == "DP"):
     error_model = PauliErrorModel(0.34, 0.32, 0.34)
 
-# list of hyperparameters
+""" List of hyper-parameters.
+ On new setup (machine, GPU, package versions etc) user would need to do some hyper-parameter tuning on their end to find optimal parameters. 
+ """
 n_node_inputs = 4
 n_node_outputs = 4
-n_iters = 3
-n_node_features = 50
-n_edge_features = 50
-len_test_set = 10
+n_iters = 30
+n_node_features = 500
+n_edge_features = 500
+len_test_set = 10000
 test_err_rate = 0.05
 
-len_train_set = len_test_set * 10
+len_train_set = len_test_set * 20
 max_train_err_rate = 0.15
 
 lr = 0.0001
@@ -99,8 +101,8 @@ GNNDecoder.hzperp = hzperp
 GNNDecoder.device = device
 
 total_params = sum(param.numel() for param in gnn.parameters())
-
-fnameload = f"trained_models/d{d}_{error_model_name}_30_500_500_200000_0.15_10000_0.05_gnn.pth 0.0144_0.0044 37"
+fnameload = f" "
+# fnameload = f"trained_models/d{d}_{error_model_name}_30_500_500_200000_0.15_10000_0.05_gnn.pth 0.0144_0.0044 37"
 model_loaded = False
 if os.path.isfile(fnameload):
     load_model(gnn, fnameload, device)
@@ -139,7 +141,8 @@ scheduler = optim.lr_scheduler.StepLR(optimizer, step_size=lr_reduce_epoch_step,
 scaler = torch.cuda.amp.GradScaler(enabled=use_amp)
 
 epochs = 10000
-batch_size = 64
+"""Adjust the batch size based on the GPU memory available - this might affect other optimal hyper-parameters (len_train_set, etc), thus in turn requires some hyper-parameter tuning on users end. """
+batch_size = 256
 criterion = nn.CrossEntropyLoss()
 
 le_rates = np.zeros((epochs, 5), dtype='float')
@@ -167,10 +170,10 @@ fname_traning_data = ""
 # training_data = np.load(fname_traning_data, mmap_mode="r")
 
 """ generate training data """
-trainset = adapt_trainset(
-    generate_syndrome_error_volume(code, error_model, p=max_train_err_rate, batch_size=len_train_set),
-    code, num_classes=n_node_inputs)
-trainloader = DataLoader(trainset, batch_size=batch_size, collate_fn=collate, shuffle=False)
+# trainset = adapt_trainset(
+#     generate_syndrome_error_volume(code, error_model, p=max_train_err_rate, batch_size=len_train_set),
+#     code, num_classes=n_node_inputs)
+# trainloader = DataLoader(trainset, batch_size=batch_size, collate_fn=collate, shuffle=False)
 
 for epoch in range(epochs):
     gnn.train()
@@ -180,10 +183,10 @@ for epoch in range(epochs):
     # trainset = np.copy(training_data[len_train_set*epoch:len_train_set*(epoch+1),:])
     # trainset = adapt_trainset(trainset,code,num_classes=n_node_inputs)
 
-    """ generate new training data for each epoch """
-    # trainset = adapt_trainset(generate_syndrome_error_volume(code, error_model, p=max_train_err_rate, batch_size=len_train_set),
-    #                           code, num_classes=n_node_inputs)
-    # trainloader = DataLoader(trainset, batch_size=batch_size, collate_fn=collate, shuffle=False)
+    """ generate new training data for each epoch - to see more samples. This was the option used in paper(for larger distances) i.e. training in the unlimited data regime """
+    trainset = adapt_trainset(generate_syndrome_error_volume(code, error_model, p=max_train_err_rate, batch_size=len_train_set),
+                              code, num_classes=n_node_inputs)
+    trainloader = DataLoader(trainset, batch_size=batch_size, collate_fn=collate, shuffle=False)
     epoch_loss = []
     for i, (inputs, targets, src_ids, dst_ids) in enumerate(trainloader):
         inputs, targets = inputs.to(device), targets.to(device)

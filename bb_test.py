@@ -53,7 +53,7 @@ def init_log_probs_of_decoder(decoder, my_log_probs):
     #print("new ", decoder.log_prob_ratios)
 
 
-d=18
+d=6
 #plot_code(code)
 #surface_code_edges(code)
 error_model_name = "DP"
@@ -70,7 +70,10 @@ elif (error_model_name == "DP"):
 # size = 2 * d ** 2 - 1
 n_node_inputs = 4
 n_node_outputs = 4
-n_iters=30
+""" usually using larger number of iterations using testing (decoding) results into better convergence and thus improved LERs
+n_iters=100 was used for surface code, 200 for bb code
+"""
+n_iters=200
 n_node_features=50
 n_edge_features=50
 
@@ -81,17 +84,11 @@ gru_dropout_p = 0.05
 enable_osd=False
 print("n_iters: ", n_iters, "n_node_outputs: ", n_node_outputs, "n_node_features: ", n_node_features,"n_edge_features: ", n_edge_features ,"enable osd",enable_osd)
 
-# fname = f"trained_models/BB_n288_k12_d18_from_d18_DP_100_50_50_200000_0.18_5000_0.1_1e-05_0.0001_128_0.05_0.05_"
-# fname = f"trained_models/BB_n72_k12_d6_from_d6_DP_30_50_50_20000_0.15_1000_0.06_0.0001_0.001_128_0.05_0.05_"
-# fname = f"trained_models/BB_n144_k12_d12_from_d12_DP_30_50_50_40000_0.18_2000_0.08_0.0001_0.0001_128_0.05_0.05_"
-# fname = f"trained_models/BB_n144_k12_d12_from_d12_DP_45_50_50_40000_0.2_2000_0.1_0.0001_0.0001_128_0.05_0.05_"
-fname = f"trained_models/BB_n288_k12_d18_from_d18_DP_45_50_50_40000_0.2_2000_0.1_0.0001_0.0001_128_0.05_0.05_"
-# fname = f"trained_models/BB_n360_k12_d24_from_d24_DP_100_50_50_200000_0.15_5000_0.1_1e-05_0.0001_128_0.05_0.05_"
-# fname = f"trained_models/BB_n756_k16_d34_DP_60_50_50_100000_0.15_5000_0.1_0.0001_0.0001_256_0.05_0.05_"
-# fname = f"trained_models/d{d}_X_45_500_500_best_"
+
+fname = f"trained_models/BB_n72_k12_d6_DP_30_50_50_100000_0.18_5000_0.05_0.0001_0.0001_128_0.05_0.05_"
 
 
-dist = 24
+dist = d
 
 code = bb_code(dist)
 print('trained', d, '\t test', dist, "\tcode name :",code.name)
@@ -112,23 +109,15 @@ GNNDecoder.hxperp = hxperp
 GNNDecoder.hzperp = hzperp
 
 GNNDecoder.device = device
-# 0.0006_0.0014 vs 0.0006_0.001
-# tools.load_model(gnn, fname + 'gnn.pth 0.041_0.015_0.041 27', device)
-# tools.load_model(gnn, fname + 'gnn.pth 0.0204_0.0208_0.021 0', device)
-# tools.load_model(gnn, fname + 'gnn.pth 0.0295_0.0285_0.0305 256', device)
-# tools.load_model(gnn, fname + 'gnn.pth 0.0288_0.0294_0.0294 98', device)
-load_model(gnn, fname + 'gnn.pth 0.041_0.043_0.0435 100', device)
-# tools.load_model(gnn, fname + 'gnn.pth 0.0362_0.041_0.041 141', device)
+
+# load_model(gnn, fname + 'gnn.pth 0.041_0.043_0.0435 100', device)
+load_model(gnn, fname + 'gnn.pth 0.024_0.0168_0.0264 96', device)
+
 perr = []
 frac = []
 
 # err_rates = np.array([0.14,0.06,0.05,0.04,0.03])
 err_rates = np.array([0.2,0.18,0.16,0.14,0.12,0.1,0.08,0.06])
-# err_rates = np.array([0.2,0.18,0.16,0.14])
-# err_rates = np.array([0.12,0.1,0.08,0.06])
-# err_rates = np.array([0.06])
-# err_rates = np.array([0.06,0.08,0.1,0.12,0.14,0.16,0.18,0.2])
-# err_rates = np.array([0.06,0.08,0.1])
 # err_rates = np.array([0.2,0.18,0.16,0.14,0.12,0.1,0.08,0.06,0.05,0.04])
 nruns=len(err_rates)
 le_rates = np.zeros((nruns,5),dtype='float')
@@ -177,7 +166,8 @@ with torch.no_grad():
         le_rates[i, 3] = ler_tot
         le_rates[i, 4] = t2 - t1
         frac.append(fraction_solved)
-        print(i, err_rate, lerx, lerz, ler_tot, test_loss,np.round(t2-t1,2))
+        # print(i, err_rate, lerx, lerz, ler_tot, test_loss,np.round(t2-t1,2))
+        print(f"{i}, {err_rate}, {lerx}, {lerz}, {ler_tot}, {test_loss},{np.round(t2-t1,2)}")
         perr.append(err_rate)
         # err_rate = err_rate / 2
 
